@@ -30,6 +30,8 @@ class AircraftObstacleEnv(gym.Env):
     goal_thresholds = [1000.0, 800.0, 600.0, 400.0, 200.0]
     goal_threshold_index = 0
     num_obstacles = 0
+    # Discrete action support: number of heading bins (e.g., 12 -> 30deg steps)
+    DISCRETE_ACTION_BINS = 12
 
     def __init__(self, config: Optional[dict] = None):
         config = config or {}
@@ -53,7 +55,7 @@ class AircraftObstacleEnv(gym.Env):
 
         self.min_obstacle_radius = float(config.get("min_obstacle_radius", 60.0))
         self.max_obstacle_radius = float(config.get("max_obstacle_radius", 180.0))
-        self.max_obstacles = int(config.get("max_obstacles", 5))
+        self.max_obstacles = int(config.get("max_obstacles", 10))
         self.num_obstacles = min(
             int(config.get("num_obstacles", 0)),
             self.max_obstacles,
@@ -70,13 +72,17 @@ class AircraftObstacleEnv(gym.Env):
 
         # Active flags are [0, 1], while all physical coordinates are normalized.
         self.observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
-
-        # Absolute desired heading, radians.
-        self.action_space = spaces.Box(
-            low=np.array([-math.pi], dtype=np.float32),
-            high=np.array([math.pi], dtype=np.float32),
-            dtype=np.float32,
-        )
+        # Choose discrete or continuous action space (discrete: heading bin index).
+        self.discrete_actions = bool(config.get("discrete_actions", True))
+        if self.discrete_actions:
+            self.action_space = spaces.Discrete(self.__class__.DISCRETE_ACTION_BINS)
+        else:
+            # Absolute desired heading, radians.
+            self.action_space = spaces.Box(
+                low=np.array([-math.pi], dtype=np.float32),
+                high=np.array([math.pi], dtype=np.float32),
+                dtype=np.float32,
+            )
 
         self.rng = np.random.default_rng()
         self.aircraft = np.zeros(3, dtype=np.float64)
@@ -131,8 +137,40 @@ class AircraftObstacleEnv(gym.Env):
         return self._get_obs(), self._info()
 
     def step(self, action):
-        desired_heading = float(np.asarray(action).reshape(-1)[0])
-        desired_heading = self._wrap_angle(desired_heading)
+        # Support discrete action (bin index) or continuous heading.
+        if self.discrete_actions:
+            # Accept scalar int or array-like with single int element.
+            try:
+                if isinstance(action, (list, tuple, np.ndarray)):
+                    idx = int(np.asarray(action).reshape(-1)[0])
+                else:
+                    idx = int(action)
+            except Exception:
+                self.last_event = "invalid_action"
+                self.step_count += 1
+                self.trajectory.append(self.aircraft.copy())
+                return self._get_obs(), -1000.0, True, False, self._info()
+
+            if idx < 0 or idx >= self.__class__.DISCRETE_ACTION_BINS:
+                self.last_event = "invalid_action"
+                self.step_count += 1
+                self.trajectory.append(self.aircraft.copy())
+                return self._get_obs(), -1000.0, True, False, self._info()
+
+            bin_size = 2.0 * math.pi / float(self.__class__.DISCRETE_ACTION_BINS)
+            desired_heading = (idx + 0.5) * bin_size - math.pi
+            desired_heading = self._wrap_angle(desired_heading)
+        else:
+            action_arr = np.asarray(action, dtype=np.float64).reshape(-1)
+            if action_arr.size == 0 or not np.all(np.isfinite(action_arr)):
+                self.last_event = "invalid_action"
+                self.step_count += 1
+                self.trajectory.append(self.aircraft.copy())
+                return self._get_obs(), -1000.0, True, False, self._info()
+
+            action_arr = np.clip(action_arr, -math.pi, math.pi)
+            desired_heading = float(action_arr[0])
+            desired_heading = self._wrap_angle(desired_heading)
 
         # Low-level heading controller:
         # aircraft turns toward commanded heading, limited by max turn rate.
@@ -180,6 +218,10 @@ class AircraftObstacleEnv(gym.Env):
         self.step_count += 1
         self.trajectory.append(self.aircraft.copy())
 
+        if not np.all(np.isfinite(self.aircraft)) or not np.all(np.isfinite(self.goal)):
+            self.last_event = "invalid_state"
+            return self._get_obs(), -1000.0, True, False, self._info()
+
         collision = self._collision()
         goal = self._goal_reached()
 
@@ -215,7 +257,14 @@ class AircraftObstacleEnv(gym.Env):
             new_dist = np.linalg.norm(self.aircraft[:2] - self.goal)
             reward += float(np.clip((old_dist - new_dist) / 50.0, -1.0, 1.0))
 
-        return self._get_obs(), reward, terminated, truncated, self._info()
+        if not np.isfinite(reward):
+            reward = -1000.0
+            terminated = True
+            self.last_event = "invalid_reward"
+        else:
+            reward = float(np.clip(reward, -500.0, 500.0))
+
+        return self._get_obs(), float(reward), terminated, truncated, self._info()
 
     # ----------------------------
     # Environment internals
@@ -297,7 +346,11 @@ class AircraftObstacleEnv(gym.Env):
                 values.extend([0.0, 0.0, 0.0])
 
         values = np.asarray(values, dtype=np.float32)
-        return np.clip(values, -1.0, 1.0)
+        values = np.nan_to_num(values, nan=0.0, posinf=1.0, neginf=-1.0)
+        values = np.clip(values, -1.0, 1.0)
+        if not np.all(np.isfinite(values)):
+            values = np.zeros_like(values, dtype=np.float32)
+        return values
 
     def _info(self):
         return {

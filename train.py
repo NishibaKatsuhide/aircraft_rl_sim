@@ -98,6 +98,52 @@ def save_trajectory_png(result, path: Path, title: str):
     plt.close(fig)
 
 
+def apply_stability_settings(algo, obstacle_count: int):
+    policy = algo.get_policy()
+    if policy is None:
+        return
+
+    base_lr = 5e-5
+    lr = max(base_lr / (2 ** max(0, int(obstacle_count))), 1e-6)
+    policy.cur_lr = float(lr)
+
+    optimizer = policy.optimizer()
+    optimizers = optimizer if isinstance(optimizer, list) else [optimizer]
+    for opt in optimizers:
+        if opt is None:
+            continue
+        for param_group in getattr(opt, "param_groups", []):
+            param_group["lr"] = float(lr)
+
+
+def halve_all_lrs(algo):
+    """Halve the current policy learning rate and optimizer param groups.
+
+    This is used as a lightweight recovery step when a NaN/instability
+    exception occurs during training.
+    """
+    policy = algo.get_policy()
+    if policy is None:
+        return
+    try:
+        cur = float(getattr(policy, "cur_lr", 5e-5))
+        new = max(cur * 0.5, 1e-8)
+        policy.cur_lr = new
+    except Exception:
+        new = 1e-6
+
+    optimizer = policy.optimizer()
+    optimizers = optimizer if isinstance(optimizer, list) else [optimizer]
+    for opt in optimizers:
+        if opt is None:
+            continue
+        for param_group in getattr(opt, "param_groups", []):
+            try:
+                param_group["lr"] = float(new)
+            except Exception:
+                pass
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--iterations", type=int, default=300)
@@ -126,14 +172,18 @@ def main():
     env_config = {
         "world_size": 5000.0,
         "num_obstacles": 0,
-        "max_obstacles": 5,
+        "max_obstacles": 10,
         "max_steps": 600,
+        "discrete_actions": True,
     }
 
     model_config = DefaultModelConfig(
-        fcnet_hiddens=[256, 256],
+        fcnet_hiddens=[128, 128],
         fcnet_activation="tanh",
-        head_fcnet_hiddens=[],
+        head_fcnet_hiddens=[32],
+        head_fcnet_activation="tanh",
+        free_log_std=False,
+        log_std_clip_param=0.5,
     )
 
     config = (
@@ -160,14 +210,16 @@ def main():
         )
         .rl_module(model_config=model_config)
         .training(
-            lr=3e-4,
+            lr=5e-5,
             gamma=0.99,
             lambda_=0.95,
-            clip_param=0.2,
-            entropy_coeff=0.01,
-            train_batch_size_per_learner=4000,
-            minibatch_size=256,
-            num_epochs=10,
+            clip_param=0.1,
+            entropy_coeff=0.02,
+            train_batch_size_per_learner=2000,
+            minibatch_size=128,
+            num_epochs=5,
+            vf_clip_param=10.0,
+            grad_clip=10.0,
         )
         .debugging(seed=args.seed, log_level="ERROR")
     )
@@ -188,7 +240,24 @@ def main():
         ])
 
         for iteration in range(1, args.iterations + 1):
-            result = algo.train()
+            apply_stability_settings(algo, int(AircraftObstacleEnv.num_obstacles))
+            # Run training with a small retry loop: on exception (e.g. NaN),
+            # halve the LR and retry a few times before failing.
+            retries = 0
+            max_retries = 5
+            while True:
+                try:
+                    result = algo.train()
+                    break
+                except Exception as e:
+                    retries += 1
+                    print(f"[stability] training exception at iter={iteration} retry={retries}: {e}")
+                    if retries > max_retries:
+                        print("[stability] maximum retries exceeded, aborting")
+                        raise
+                    halve_all_lrs(algo)
+                    print(f"[stability] halved LR and retrying (attempt {retries})")
+                    continue
 
             # RLlib metric names may differ slightly between API versions.
             reward_mean = result.get("env_runners", {}).get(
@@ -203,6 +272,15 @@ def main():
                 "num_env_steps_sampled_lifetime",
                 result.get("timesteps_total", 0)
             )
+
+            if not np.isfinite(float(reward_mean)) or not np.isfinite(float(len_mean)):
+                print(
+                    f"[stability] non-finite metrics detected at iter={iteration}: "
+                    f"reward_mean={reward_mean} len_mean={len_mean} "
+                    f"goal_threshold={AircraftObstacleEnv.goal_thresholds[AircraftObstacleEnv.goal_threshold_index]} "
+                    f"num_obstacles={AircraftObstacleEnv.num_obstacles}"
+                )
+                raise RuntimeError("Non-finite training metric encountered; learning was unstable.")
 
             eval_reward = ""
             eval_steps = ""

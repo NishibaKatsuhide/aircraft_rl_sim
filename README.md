@@ -8,7 +8,7 @@
 - 強化学習: Ray/RLlib の PPO
 - アルゴリズム: PPO
 - NN: RLlib の標準 MLP (`256-256`)
-- Action: 絶対方位角 [-pi, pi]
+- Action: デフォルトで離散（12-bin, 30°刻み）。連続角度（[-pi, pi]）も `discrete_actions` 設定で選べます。
 - Observation:
   - 自機位置 `(x, y, z)`
   - ゴール位置 `(x, y)`
@@ -20,7 +20,7 @@
 - 障害物:
   - 初期状態では 0 個
   - ゴール到達ごとに 1 個ずつ増加
-  - 最大 5 個まで
+  - 最大 10 個まで（`max_obstacles` で変更可能）
   - 地面から上方へ無限に伸びる円柱
 - ゴール判定:
   - 高度は無視
@@ -45,8 +45,9 @@
   - `training_history.csv`
   - TensorBoard
   - 一定間隔で評価飛行の3D軌跡PNG
-  - `runs/aircraft_ppo/state_logs/*.json` に episode 状態を保存
+  - `runs/aircraft_ppo/state_logs/*.json` に episode 状態を保存（`visualize.py` はこれを再生します）
   - checkpoint
+  - 学習安定化のための対策: 観測値の非有限値除去、報酬/行動のクリップ、`log_std` のクリップ、障害物増加時の学習率半減などが組み込まれています
 - 学習済みモデル:
   - `visualize.py` で3D軌跡をアニメーション表示
   - 可能なら `--state-log` で保存済み episode を再生
@@ -79,6 +80,8 @@ python train.py --iterations 1000 --num-learners 1 --gpus-per-learner 1
 ```
 
 学習結果は `runs/` 以下に保存されます。
+
+注意: デフォルト設定では障害物の最大数が `10`、行動は離散（12-bin）となっています。
 
 TensorBoard:
 
