@@ -27,6 +27,9 @@ class AircraftObstacleEnv(gym.Env):
     metadata = {"render_modes": ["human"]}
 
     MAX_OBSTACLES = 12
+    goal_thresholds = [1000.0, 800.0, 600.0, 400.0, 200.0]
+    goal_threshold_index = 0
+    num_obstacles = 0
 
     def __init__(self, config: Optional[dict] = None):
         config = config or {}
@@ -44,10 +47,17 @@ class AircraftObstacleEnv(gym.Env):
         self.aircraft_radius = float(config.get("aircraft_radius", 10.0))
         self.goal_radius = float(config.get("goal_radius", 75.0))
         self.goal_altitude_tolerance = float(config.get("goal_altitude_tolerance", 50.0))
+        self.goal_thresholds = self.__class__.goal_thresholds
+        self.goal_threshold_index = self.__class__.goal_threshold_index
+        self.num_obstacles = self.__class__.num_obstacles
 
         self.min_obstacle_radius = float(config.get("min_obstacle_radius", 60.0))
         self.max_obstacle_radius = float(config.get("max_obstacle_radius", 180.0))
-        self.num_obstacles = int(config.get("num_obstacles", 8))
+        self.max_obstacles = int(config.get("max_obstacles", 5))
+        self.num_obstacles = min(
+            int(config.get("num_obstacles", 0)),
+            self.max_obstacles,
+        )
 
         self.max_steps = int(config.get("max_steps", 600))
         self.render_mode = config.get("render_mode")
@@ -88,12 +98,14 @@ class AircraftObstacleEnv(gym.Env):
 
         self.step_count = 0
         self.last_event = ""
+        self.goal_threshold_index = self.__class__.goal_threshold_index
+        self.num_obstacles = self.__class__.num_obstacles
 
-        # Start near the left side; goal near the right side.
+        # Start near the lower-left area; goal near the upper-right area.
         self.aircraft = np.array(
             [
-                -0.42 * self.world_size,
-                self.rng.uniform(-0.35, 0.35) * self.world_size,
+                self.rng.uniform(0.05, 0.25) * self.world_size,
+                self.rng.uniform(0.05, 0.90) * self.world_size,
                 self.rng.uniform(80.0, 150.0),
             ],
             dtype=np.float64,
@@ -101,8 +113,8 @@ class AircraftObstacleEnv(gym.Env):
 
         self.goal = np.array(
             [
-                self.rng.uniform(0.30, 0.45) * self.world_size,
-                self.rng.uniform(-0.40, 0.40) * self.world_size,
+                self.rng.uniform(0.75, 0.95) * self.world_size,
+                self.rng.uniform(0.10, 0.90) * self.world_size,
             ],
             dtype=np.float64,
         )
@@ -113,30 +125,7 @@ class AircraftObstacleEnv(gym.Env):
         )
         self.heading = direct_heading + self.rng.normal(0.0, math.radians(10.0))
 
-        self.obstacles = []
-        attempts = 0
-        while len(self.obstacles) < self.num_obstacles and attempts < 5000:
-            attempts += 1
-            x = self.rng.uniform(-0.05, 0.48) * self.world_size
-            y = self.rng.uniform(-0.45, 0.45) * self.world_size
-            radius = self.rng.uniform(
-                self.min_obstacle_radius, self.max_obstacle_radius
-            )
-
-            # Keep obstacles away from the initial aircraft and goal.
-            if np.linalg.norm(np.array([x, y]) - self.aircraft[:2]) < radius + 250:
-                continue
-            if np.linalg.norm(np.array([x, y]) - self.goal) < radius + 250:
-                continue
-
-            # Avoid almost-overlapping obstacles to keep scenarios readable.
-            if any(
-                math.hypot(x - o.x, y - o.y) < radius + o.radius + 80
-                for o in self.obstacles
-            ):
-                continue
-
-            self.obstacles.append(Obstacle(x, y, radius))
+        self.obstacles = self._generate_obstacles(self.num_obstacles)
 
         self.trajectory = [self.aircraft.copy()]
         return self._get_obs(), self._info()
@@ -159,6 +148,16 @@ class AircraftObstacleEnv(gym.Env):
         dy = self.speed * self.dt * math.sin(self.heading)
         self.aircraft[0] += dx
         self.aircraft[1] += dy
+
+        boundary_hit = (
+            self.aircraft[0] <= 0.0 or self.aircraft[0] >= self.world_size or
+            self.aircraft[1] <= 0.0 or self.aircraft[1] >= self.world_size
+        )
+
+        # Keep the aircraft within the world bounds, where x/y are constrained to
+        # the same 0..world_size domain as the goal and obstacles.
+        self.aircraft[0] = float(np.clip(self.aircraft[0], 0.0, self.world_size))
+        self.aircraft[1] = float(np.clip(self.aircraft[1], 0.0, self.world_size))
 
         # Simple vertical autopilot:
         # climb to cruise altitude, then descend near the goal.
@@ -190,7 +189,11 @@ class AircraftObstacleEnv(gym.Env):
         terminated = False
         truncated = False
 
-        if collision:
+        if boundary_hit:
+            reward = -500.0
+            terminated = True
+            self.last_event = "boundary"
+        elif collision:
             reward = -1000.0
             terminated = True
             self.last_event = "collision"
@@ -218,6 +221,31 @@ class AircraftObstacleEnv(gym.Env):
     # Environment internals
     # ----------------------------
 
+    def _generate_obstacles(self, count: int):
+        obstacles = []
+        attempts = 0
+        while len(obstacles) < count and attempts < 5000:
+            attempts += 1
+            x = self.rng.uniform(0.05, 0.95) * self.world_size
+            y = self.rng.uniform(0.05, 0.95) * self.world_size
+            radius = self.rng.uniform(
+                self.min_obstacle_radius, self.max_obstacle_radius
+            )
+
+            if np.linalg.norm(np.array([x, y]) - self.aircraft[:2]) < radius + 250:
+                continue
+            if np.linalg.norm(np.array([x, y]) - self.goal) < radius + 250:
+                continue
+
+            if any(
+                math.hypot(x - o.x, y - o.y) < radius + o.radius + 80
+                for o in obstacles
+            ):
+                continue
+
+            obstacles.append(Obstacle(x, y, radius))
+        return obstacles
+
     def _collision(self) -> bool:
         for obstacle in self.obstacles:
             d = math.hypot(
@@ -230,35 +258,46 @@ class AircraftObstacleEnv(gym.Env):
 
     def _goal_reached(self) -> bool:
         horizontal_distance = np.linalg.norm(self.aircraft[:2] - self.goal)
-        vertical_distance = abs(self.aircraft[2] - 100.0)
-        return (
-            horizontal_distance <= self.goal_radius
-            and vertical_distance <= self.goal_altitude_tolerance
-        )
+        target_threshold = self.goal_thresholds[self.goal_threshold_index]
+        reached = horizontal_distance <= target_threshold
+
+        if reached:
+            if self.goal_threshold_index < len(self.goal_thresholds) - 1:
+                self.goal_threshold_index += 1
+            else:
+                self.goal_threshold_index = 0
+                if self.num_obstacles < self.max_obstacles:
+                    self.num_obstacles += 1
+
+            self.__class__.goal_threshold_index = self.goal_threshold_index
+            self.__class__.num_obstacles = self.num_obstacles
+
+        return reached
 
     def _get_obs(self):
-        scale_xy = self.world_size / 2.0
+        half_world = self.world_size / 2.0
 
         values = [
-            self.aircraft[0] / scale_xy,
-            self.aircraft[1] / scale_xy,
+            (self.aircraft[0] - half_world) / half_world,
+            (self.aircraft[1] - half_world) / half_world,
             self.aircraft[2] / self.max_altitude,
-            self.goal[0] / scale_xy,
-            self.goal[1] / scale_xy,
+            (self.goal[0] - half_world) / half_world,
+            (self.goal[1] - half_world) / half_world,
         ]
 
         for i in range(self.MAX_OBSTACLES):
             if i < len(self.obstacles):
                 o = self.obstacles[i]
                 values.extend([
-                    o.x / scale_xy,
-                    o.y / scale_xy,
+                    (o.x - half_world) / half_world,
+                    (o.y - half_world) / half_world,
                     1.0,
                 ])
             else:
                 values.extend([0.0, 0.0, 0.0])
 
-        return np.asarray(values, dtype=np.float32)
+        values = np.asarray(values, dtype=np.float32)
+        return np.clip(values, -1.0, 1.0)
 
     def _info(self):
         return {

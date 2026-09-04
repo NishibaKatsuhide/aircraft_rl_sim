@@ -5,7 +5,7 @@
 ## 設計
 
 - 環境: Gymnasium `Env`
-- 強化学習: 最新の公式 Ray/RLlib API を想定
+- 強化学習: Ray/RLlib の PPO
 - アルゴリズム: PPO
 - NN: RLlib の標準 MLP (`256-256`)
 - Action: 絶対方位角 [-pi, pi]
@@ -13,27 +13,43 @@
   - 自機位置 `(x, y, z)`
   - ゴール位置 `(x, y)`
   - 最大12個の障害物 `(x, y, active)`
-- 障害物: 地面から上方へ無限に伸びる円柱
+- 地理条件:
+  - 空域は `x, y = 0..5000 [m]`
+  - ゴールも同じ範囲にランダム配置
+  - 航空機は初期状態では常にこの範囲内に出現
+- 障害物:
+  - 初期状態では 0 個
+  - ゴール到達ごとに 1 個ずつ増加
+  - 最大 5 個まで
+  - 地面から上方へ無限に伸びる円柱
+- ゴール判定:
+  - 高度は無視
+  - 水平距離だけで判定
+  - 閾値は 1000 → 800 → 600 → 400 → 200 m と段階的に狭くなる
+  - 200 m で達成した後に障害物数が 1 増える
+- 境界:
+  - `x` または `y` が 0 または 5000 を超えると境界衝突
+  - 罰則は `-500` で episode 終了
 - 航空機:
   - 水平速度一定
   - 指定方位へ最大旋回率まで追従
   - 高度は簡易オートパイロットで上昇・巡航・降下
-- 成功:
-  - ゴール中心から水平75 m以内
-  - ゴール高度 ±50 m以内
 - 衝突:
   - 障害物円柱の半径 + 航空機安全半径以内
 - 報酬:
   - 毎step: -1
   - ゴール: `1000 - 2 * step_count`
-  - 衝突: -1000
+  - 障害物衝突: -1000
+  - 境界衝突: -500
 - 学習中:
   - `training_history.csv`
   - TensorBoard
   - 一定間隔で評価飛行の3D軌跡PNG
+  - `runs/aircraft_ppo/state_logs/*.json` に episode 状態を保存
   - checkpoint
 - 学習済みモデル:
   - `visualize.py` で3D軌跡をアニメーション表示
+  - 可能なら `--state-log` で保存済み episode を再生
 
 ## インストール
 
@@ -72,25 +88,34 @@ tensorboard --logdir runs
 
 ## 学習途中の飛行を見る
 
-学習中に保存された checkpoint を指定:
+保存済み episode のログを再生する（推奨）:
 
 ```bash
-python visualize.py --checkpoint runs/checkpoints/iter_0100
+python visualize.py --state-log runs/aircraft_ppo/state_logs/iter_00041.json
 ```
 
-または最後のcheckpoint:
+保存済み checkpoint から直接再現する場合:
 
 ```bash
-python visualize.py --checkpoint <checkpoint-directory>
+python visualize.py --checkpoint runs/aircraft_ppo/checkpoints/iter_00300
 ```
 
-`--episodes`、`--save` などの引数も利用できます。
+保存先を指定して GIF などに出力する場合:
+
+```bash
+python visualize.py --state-log runs/aircraft_ppo/state_logs/iter_00041.json --save /tmp/episode.gif
+```
+
+利用できる主な引数は `--checkpoint` / `--state-log` / `--seed` / `--save` です。
 
 ## 重要なモデル化上の注意
 
 今回の仕様では障害物が「地面から無限上空まで伸びる円柱」なので、高度を上げても障害物を回避できません。
 したがって、障害物回避という観点では本質的には水平2次元の経路計画問題です。
 3次元化は「自機位置を3次元で持つ」「ゴール上空への到着」「上昇・巡航・降下」の部分に意味があります。
+
+また、現在のゴール判定は高度を無視し、水平距離の閾値だけで評価します。
+そのため、ゴールの視覚的な半径は `1000, 800, 600, 400, 200 [m]` と変化し、障害物数も同時に進行します。
 
 もし将来、
 - 高度制限付き障害物
