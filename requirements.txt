@@ -1,0 +1,7 @@
+ray[rllib]>=2.58.0
+gymnasium>=1.1
+numpy>=2.0
+matplotlib>=3.9
+pandas>=2.2
+tensorboard>=2.18
+torch>=2.5
