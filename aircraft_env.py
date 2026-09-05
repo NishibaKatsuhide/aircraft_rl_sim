@@ -281,13 +281,30 @@ class AircraftObstacleEnv(gym.Env):
                 self.min_obstacle_radius, self.max_obstacle_radius
             )
 
+            # Don't place obstacles too close to the aircraft (keep a large
+            # safety margin so the episode doesn't start in collision).
             if np.linalg.norm(np.array([x, y]) - self.aircraft[:2]) < radius + 250:
                 continue
-            if np.linalg.norm(np.array([x, y]) - self.goal) < radius + 250:
+
+            # Avoid spawning obstacles within the current goal threshold area.
+            # Use the current goal threshold (horizontal) so obstacles do not
+            # appear inside the goal-arrival region.
+            try:
+                target_threshold = float(self.goal_thresholds[self.goal_threshold_index])
+            except Exception:
+                target_threshold = float(self.goal_thresholds[0])
+
+            dist_to_goal = np.linalg.norm(np.array([x, y]) - self.goal)
+            # If the obstacle would lie within the goal threshold (plus a small
+            # safety buffer depending on its radius), skip it.
+            if dist_to_goal < (target_threshold + radius + 10.0):
                 continue
 
+            # Ensure obstacles do not overlap each other. Use a small separation
+            # margin so generated cylinders are non-overlapping.
+            separation_margin = 5.0
             if any(
-                math.hypot(x - o.x, y - o.y) < radius + o.radius + 80
+                math.hypot(x - o.x, y - o.y) <= (radius + o.radius + separation_margin)
                 for o in obstacles
             ):
                 continue

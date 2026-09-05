@@ -111,6 +111,10 @@ python visualize.py --state-log runs/aircraft_ppo/state_logs/iter_00041.json --s
 
 利用できる主な引数は `--checkpoint` / `--state-log` / `--seed` / `--save` です。
 
+## 学習中の動画
+
+![Training episode](flight_video.gif)
+
 ## 重要なモデル化上の注意
 
 今回の仕様では障害物が「地面から無限上空まで伸びる円柱」なので、高度を上げても障害物を回避できません。
