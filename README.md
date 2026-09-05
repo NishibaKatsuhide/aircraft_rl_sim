@@ -1,6 +1,8 @@
 # 3D Aircraft Obstacle-Avoidance RL Simulator
 
-航空機が3次元空間を飛行し、地面から無限上空へ伸びる円柱状障害物を避けながら、指定されたゴール上空へ到達する強化学習用シミュレータです。
+お初にお目にかかり申す。丹柴勝秀に御座り申す。
+
+此は航空機が3次元空間を飛行し、地面から無限上空へ伸びる円柱状障害物を避けながら、指定されたゴール上空へ到達する強化学習用シミュレータにて候。
 
 ## 設計
 
@@ -8,7 +10,7 @@
 - 強化学習: Ray/RLlib の PPO
 - アルゴリズム: PPO
 - NN: RLlib の標準 MLP (`256-256`)
-- Action: デフォルトで離散（12-bin, 30°刻み）。連続角度（[-pi, pi]）も `discrete_actions` 設定で選べます。
+- Action: デフォルトで離散（12-bin, 30°刻み）。連続角度（[-pi, pi]）も `discrete_actions` 設定で選択可能
 - Observation:
   - 自機位置 `(x, y, z)`
   - ゴール位置 `(x, y)`
@@ -54,7 +56,7 @@
 
 ## インストール
 
-Python 3.10～3.12程度を推奨。
+Python 3.10～3.12程度を推奨致す。
 
 ```bash
 python -m venv .venv
@@ -64,8 +66,8 @@ source .venv/bin/activate       # Linux/macOS
 pip install -r requirements.txt
 ```
 
-RLlib公式ドキュメントでは `pip install -U "ray[rllib]"` が案内されています。
-このプロジェクトでは依存関係を固定しすぎず、インストール時点の最新RLlibを使用します。
+RLlib公式ドキュメントでは `pip install -U "ray[rllib]"` が案内されてをり候。
+このプロジェクトでは依存関係を固定しすぎず、インストール時点の最新RLlibを使用致す。
 
 ## 学習
 
@@ -79,9 +81,9 @@ GPUを使う場合:
 python train.py --iterations 1000 --num-learners 1 --gpus-per-learner 1
 ```
 
-学習結果は `runs/` 以下に保存されます。
+学習結果は `runs/` 以下に保存され候。
 
-注意: デフォルト設定では障害物の最大数が `10`、行動は離散（12-bin）となっています。
+注意: デフォルト設定では障害物の最大数が `10`、行動は離散（12-bin）にて候。
 
 TensorBoard:
 
@@ -109,7 +111,7 @@ python visualize.py --checkpoint runs/aircraft_ppo/checkpoints/iter_00300
 python visualize.py --state-log runs/aircraft_ppo/state_logs/iter_00041.json --save /tmp/episode.gif
 ```
 
-利用できる主な引数は `--checkpoint` / `--state-log` / `--seed` / `--save` です。
+利用できる主な引数は `--checkpoint` / `--state-log` / `--seed` / `--save` にて候。
 
 ## 学習中の動画
 
@@ -135,4 +137,4 @@ python visualize.py --state-log runs/aircraft_ppo/state_logs/iter_00041.json --s
 - 風
 - GPS/INS誤差
 
-などを入れるなら、Observation/Actionを拡張できます。
+などを入れるなら、Observation/Actionを拡張致すべし。
